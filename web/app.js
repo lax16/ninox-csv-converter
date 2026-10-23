@@ -69,7 +69,7 @@ async function start() {
   worker = new Worker('worker.js');
   worker.onmessage = (e) => onMessage(e.data);
   worker.onerror = (e) => finish(`Unexpected error: ${e.message}`, 'error');
-  worker.postMessage({ file, mode, dirHandle, bom: $('bom').checked });
+  worker.postMessage({ file, mode, dirHandle, bom: $('bom').checked, attachments: $('attachments').checked });
 }
 
 function onMessage(msg) {
@@ -78,6 +78,8 @@ function onMessage(msg) {
     const speed = seconds > 0 ? ` · ${formatBytes(msg.done / seconds)}/s` : '';
     setProgress('Converting…', msg.done / msg.total,
       `${formatBytes(msg.done)} of ${formatBytes(msg.total)}${speed} · ${msg.records.toLocaleString()} records · ${msg.tables} tables`);
+  } else if (msg.type === 'progress' && msg.phase === 'files') {
+    setProgress('Copying attachments…', msg.total ? msg.done / msg.total : 1, `${formatBytes(msg.done)} of ${formatBytes(msg.total)}`);
   } else if (msg.type === 'progress' && msg.phase === 'zip') {
     setProgress('Packing ZIP…', msg.total ? msg.done / msg.total : 1, `${formatBytes(msg.done)} of ${formatBytes(msg.total)}`);
   } else if (msg.type === 'done') {
@@ -91,8 +93,10 @@ function showResult({ result, stats, tables, seconds }) {
   const notes = [];
   if (stats.unknownTable) notes.push(`${stats.unknownTable.toLocaleString()} records of deleted tables skipped`);
   if (stats.invalidLines) notes.push(`${stats.invalidLines.toLocaleString()} unreadable lines skipped`);
+  if (stats.missingAttachments) notes.push(`${stats.missingAttachments.toLocaleString()} referenced attachments not found in the backup`);
   const where = result.type === 'folder' ? ` into folder “${result.folder}”` : '';
-  finish(`Wrote ${tables.length} CSV files with ${stats.records.toLocaleString()} records${where} in ${seconds.toFixed(1)} s.`
+  const files = stats.attachments ? ` and ${stats.attachments.toLocaleString()} attachments` : '';
+  finish(`Wrote ${tables.length} CSV files with ${stats.records.toLocaleString()} records${files}${where} in ${seconds.toFixed(1)} s.`
     + (notes.length ? ` (${notes.join(', ')})` : ''), 'ok');
 
   const body = $('tables').querySelector('tbody');

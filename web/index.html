@@ -65,6 +65,7 @@
 
     <fieldset>
       <legend>Options</legend>
+      <label><input type="checkbox" id="attachments" checked> <span>Include attachments <small>(saved under <code>files/</code>, file fields in the CSVs link to them)</small></span></label>
       <label><input type="checkbox" id="bom" checked> <span>Add UTF-8 BOM <small>(makes Excel show umlauts correctly)</small></span></label>
     </fieldset>
 
@@ -89,7 +90,7 @@
     </table>
   </section>
 
-  <p class="muted">Columns: record ID, creation and modification date (Unix ms), then all fields. Reference fields are suffixed with <code>-ref</code> and contain the referenced record's ID. Separator is <code>;</code>, values are quoted per RFC&nbsp;4180.</p>
+  <p class="muted">Columns: record ID, creation and modification date (Unix ms), then all fields. Reference fields are suffixed with <code>-ref</code> and contain the referenced record's ID. File fields contain the attachment's path relative to the CSV, e.g. <code>files/Fahrzeuge/11/vorne.jpg</code>. Separator is <code>;</code>, values are quoted per RFC&nbsp;4180.</p>
 </main>
 <script src="app.js"></script>
 </body>

@@ -20,6 +20,13 @@ Differences to `main.py`:
 - values are not altered; values containing `;`, `"` or line breaks are quoted per RFC 4180 instead
 - every CSV starts with an `ID` column so `-ref` columns can be resolved
 - optional UTF-8 BOM so Excel detects the encoding
+- attachments are included (optional)
+
+### Attachments
+Inside the backup, attachments are stored as `files/{table id}/{record id}/{file name}` and file fields only contain the file name.
+The web version copies them to `files/{table name}/{record id}/{file name}` next to the CSVs (the table name is the CSV's file name without `.csv`)
+and replaces the file name in the CSV with that relative path, e.g. `files/Fahrzeuge/11/vorne.jpg`.
+Attachments that no record refers to any more are copied as well. In the ZIP, already compressed formats (images, videos, Office files) are stored without recompression.
 
 ## How to use (Python script)
 First, create a venv and activate it:
@@ -65,4 +72,4 @@ The data.db file contains a key value store with JSON data as the values. This J
 as well as the record's column data.
 
 ## Limitations
-So far nothing is done for attachments, although they should just refer to a path within the .ninox file.
+The Python script does nothing with attachments (the web version does, see above).

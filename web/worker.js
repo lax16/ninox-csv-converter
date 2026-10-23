@@ -1,6 +1,8 @@
 // Converts a Ninox backup (.ninox, a ZIP file) to one CSV per table, entirely in the browser.
 // Everything is streamed: the backup is read in slices, data.db is decompressed and parsed line by line,
 // and CSV rows are written out as soon as they are produced, so memory use does not grow with the file size.
+// Attachments (files/{table id}/{record id}/{name}) are copied to files/{table name}/{record id}/{name}
+// and file fields in the CSVs are rewritten to that relative path.
 
 importScripts('vendor/zip-core.min.js');
 zip.configure({ useWebWorkers: false });
@@ -9,6 +11,8 @@ zip.configure({ useWebWorkers: false });
 const KEY_RE = /^[A-Za-z0-9]+$/;
 // records are stored as "U{table_id}{record_id}", e.g. "UA11" is record 11 of table "A"
 const RECORD_KEY_RE = /^U([A-Z]+)([0-9]+)$/;
+// already compressed formats are stored in the output ZIP without compressing them again
+const STORED_EXTENSIONS = /\.(jpe?g|png|gif|webp|heic|mp[34]|mov|avi|zip|gz|7z|rar|docx|xlsx|pptx|odt|ods)$/i;
 const FLUSH_CHARS = 256 * 1024;
 const PROGRESS_INTERVAL_MS = 200;
 const OPFS_WORK_DIR = 'ninox-csv';
@@ -27,17 +31,27 @@ function post(message) {
   self.postMessage(message);
 }
 
-async function convert({ file, mode, dirHandle, bom }) {
+async function convert({ file, mode, dirHandle, bom, attachments: includeAttachments }) {
   const startedAt = Date.now();
   const reader = new zip.ZipReader(new zip.BlobReader(file));
   const entries = await reader.getEntries();
-  const dataEntry = entries.find((e) => e.filename === 'data.db') || entries.find((e) => e.filename.endsWith('/data.db'));
+  const entryPath = (entry) => entry.filename.replace(/\\/g, '/');
+  const dataEntry = entries.find((e) => entryPath(e) === 'data.db') || entries.find((e) => entryPath(e).endsWith('/data.db'));
   if (!dataEntry) {
     throw new Error('No data.db found in this file. Is it a Ninox backup?');
   }
 
+  // attachments by their path below files/, e.g. "A/11/links 3.jpg"
+  const attachments = new Map();
+  if (includeAttachments) {
+    for (const entry of entries) {
+      const path = entryPath(entry);
+      if (!entry.directory && path.startsWith('files/')) attachments.set(path.slice('files/'.length), entry);
+    }
+  }
+
   const output = mode === 'folder' ? createFolderOutput(dirHandle) : await createZipOutput(file.name);
-  const converter = new Converter(output, bom);
+  const converter = new Converter(output, bom, attachments);
 
   let lastProgress = 0;
   const reportProgress = (force) => {
@@ -86,7 +100,6 @@ async function convert({ file, mode, dirHandle, bom }) {
   }
   if (pending.length) converter.handleLine(pending.join(''));
   await extraction;
-  await reader.close();
   reportProgress(true);
 
   if (!converter.schema) {
@@ -94,26 +107,37 @@ async function convert({ file, mode, dirHandle, bom }) {
   }
   await converter.closeAll();
 
+  // copy every attachment, including ones no record refers to any more
+  const attachmentTotal = [...attachments.values()].reduce((sum, e) => sum + e.uncompressedSize, 0);
+  let attachmentDone = 0;
+  for (const [path, entry] of attachments) {
+    await output.addAttachment(converter.attachmentPath(path), entry);
+    attachmentDone += entry.uncompressedSize;
+    if (mode === 'folder') post({ type: 'progress', phase: 'files', done: attachmentDone, total: attachmentTotal });
+  }
+
   const result = await output.finish((done, total) => post({ type: 'progress', phase: 'zip', done, total }));
+  await reader.close();
   post({
     type: 'done',
     result,
-    stats: converter.stats,
+    stats: { ...converter.stats, attachments: attachments.size },
     tables: [...converter.tables.values()].map((t) => ({ caption: t.caption, file: t.fileName, rows: t.rows })),
     seconds: (Date.now() - startedAt) / 1000,
   });
 }
 
 class Converter {
-  constructor(output, bom) {
+  constructor(output, bom, attachments) {
     this.output = output;
     this.bom = bom;
+    this.attachments = attachments;
     this.schema = null;
+    this.names = new Map(); // table id -> unique, file system safe name used for the CSV file and the attachment folder
     this.tables = new Map(); // table id -> table state, created when the table's first record shows up
-    this.usedFileNames = new Set();
     this.creating = []; // sinks are created asynchronously, rows are buffered until flushFull() awaits them
     this.bytesIn = 0;
-    this.stats = { records: 0, unknownTable: 0, invalidLines: 0 };
+    this.stats = { records: 0, unknownTable: 0, invalidLines: 0, missingAttachments: 0 };
   }
 
   handleLine(line) {
@@ -133,7 +157,7 @@ class Converter {
 
     // the first entry ("s") holds the database schema with all tables and fields
     if (!this.schema && data.types) {
-      this.schema = data.types;
+      this.setSchema(data.types);
       return;
     }
 
@@ -150,19 +174,49 @@ class Converter {
     }
 
     const table = this.tables.get(tableId) || this.openTable(tableId, tableDef);
-    table.push(recordRow(table.fields, recordId, data));
+    table.push(this.recordRow(tableId, table.fields, recordId, data));
     table.rows++;
     this.stats.records++;
   }
 
+  setSchema(types) {
+    this.schema = types;
+    const used = new Set();
+    for (const [tableId, tableDef] of Object.entries(types)) {
+      this.names.set(tableId, uniqueName(tableDef.caption || tableId, used));
+    }
+  }
+
   openTable(tableId, tableDef) {
     const fields = Object.entries(tableDef.fields || {});
-    const fileName = uniqueFileName(tableDef.caption || tableId, this.usedFileNames);
+    const fileName = `${this.names.get(tableId)}.csv`;
     const table = new TableWriter(tableDef.caption || tableId, fileName, fields);
     this.creating.push(this.output.createSink(fileName).then((sink) => { table.sink = sink; }));
     table.push((this.bom ? '﻿' : '') + headerRow(fields));
     this.tables.set(tableId, table);
     return table;
+  }
+
+  recordRow(tableId, fields, recordId, record) {
+    const columns = [recordId, record._cd ?? '', record._md ?? ''];
+    for (const [fieldId, field] of fields) {
+      let value = formatValue(field, record[fieldId]);
+      // file fields only hold the file name, the file itself is stored at files/{table id}/{record id}/{name}
+      if (field.base === 'file' && value !== '' && this.attachments.size) {
+        const path = `${tableId}/${recordId}/${value}`;
+        if (this.attachments.has(path)) value = this.attachmentPath(path);
+        else this.stats.missingAttachments++;
+      }
+      columns.push(value);
+    }
+    return columns.map(csvField).join(';') + '\r\n';
+  }
+
+  // maps "A/11/links 3.jpg" to "files/Fahrzeuge/11/links 3.jpg", the path used in the output and in the CSVs
+  attachmentPath(path) {
+    const parts = path.split('/').filter(Boolean);
+    if (parts.length > 1 && this.names.has(parts[0])) parts[0] = this.names.get(parts[0]);
+    return ['files', ...parts.map(safeName)].join('/');
   }
 
   async flushFull() {
@@ -220,22 +274,14 @@ function headerRow(fields) {
   return columns.map(csvField).join(';') + '\r\n';
 }
 
-function recordRow(fields, recordId, record) {
-  const columns = [recordId, record._cd ?? '', record._md ?? ''];
-  for (const [fieldId, field] of fields) {
-    columns.push(formatValue(field, record[fieldId]));
-  }
-  return columns.map(csvField).join(';') + '\r\n';
-}
-
 function formatValue(field, value) {
   if (value === undefined || value === null) return '';
   // choice fields store the id of the selected option, use its caption instead
   if (field.base === 'choice' && field.values && Object.hasOwn(field.values, value)) {
-    return field.values[value].caption ?? value;
+    return String(field.values[value].caption ?? value);
   }
   if (typeof value === 'object') return JSON.stringify(value);
-  return value;
+  return String(value);
 }
 
 // RFC 4180 quoting: values containing the separator, quotes or line breaks are wrapped in quotes, inner quotes are doubled
@@ -244,21 +290,44 @@ function csvField(value) {
   return /[";\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-function uniqueFileName(caption, used) {
-  const base = String(caption).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').replace(/[. ]+$/, '').trim() || 'Tabelle';
-  let name = `${base}.csv`;
-  for (let n = 2; used.has(name.toLowerCase()); n++) name = `${base} (${n}).csv`;
+// replaces characters that are not allowed in file names on Windows
+function safeName(name) {
+  return String(name).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').replace(/[. ]+$/, '').trim() || '_';
+}
+
+function uniqueName(caption, used) {
+  const base = safeName(caption);
+  let name = base;
+  for (let n = 2; used.has(name.toLowerCase()); n++) name = `${base} (${n})`;
   used.add(name.toLowerCase());
   return name;
 }
 
 // Output: write each CSV directly into a folder the user picked (File System Access API, Chromium only)
 function createFolderOutput(dirHandle) {
+  const dirs = new Map();
+  const getDir = async (parts) => {
+    let dir = dirHandle;
+    let key = '';
+    for (const part of parts) {
+      key += '/' + part;
+      if (!dirs.has(key)) dirs.set(key, await dir.getDirectoryHandle(part, { create: true }));
+      dir = dirs.get(key);
+    }
+    return dir;
+  };
+
   return {
     async createSink(fileName) {
       const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
       const writable = await fileHandle.createWritable();
       return { write: (bytes) => writable.write(bytes), close: () => writable.close() };
+    },
+    async addAttachment(path, entry) {
+      const parts = path.split('/');
+      const dir = await getDir(parts.slice(0, -1));
+      const fileHandle = await dir.getFileHandle(parts[parts.length - 1], { create: true });
+      await entry.getData(await fileHandle.createWritable());
     },
     async finish() {
       return { type: 'folder', folder: dirHandle.name };
@@ -267,13 +336,15 @@ function createFolderOutput(dirHandle) {
 }
 
 // Output: write the CSVs to the origin private file system (OPFS, on disk), then pack them into one ZIP there.
-// The page downloads that ZIP as a disk-backed File, so nothing large is held in memory.
+// Attachments are streamed from the backup straight into that ZIP. The page downloads the ZIP as a disk-backed
+// File, so nothing large is held in memory.
 async function createZipOutput(backupName) {
   const root = await navigator.storage.getDirectory();
   await root.removeEntry(OPFS_WORK_DIR, { recursive: true }).catch(() => {});
   const workDir = await root.getDirectoryHandle(OPFS_WORK_DIR, { create: true });
   const tmpDir = await workDir.getDirectoryHandle('tmp', { create: true });
   const fileNames = [];
+  const attachments = [];
 
   return {
     async createSink(fileName) {
@@ -282,10 +353,14 @@ async function createZipOutput(backupName) {
       return syncHandleSink(await fileHandle.createSyncAccessHandle());
     },
 
+    async addAttachment(path, entry) {
+      attachments.push({ path, entry });
+    },
+
     async finish(onProgress) {
       const files = [];
       for (const name of fileNames) files.push(await (await tmpDir.getFileHandle(name)).getFile());
-      const total = files.reduce((sum, f) => sum + f.size, 0);
+      const total = files.reduce((sum, f) => sum + f.size, 0) + attachments.reduce((sum, a) => sum + a.entry.uncompressedSize, 0);
 
       const zipName = backupName.replace(/\.[^.]*$/, '') + '-csv.zip';
       const zipHandle = await workDir.getFileHandle(zipName, { create: true });
@@ -300,6 +375,14 @@ async function createZipOutput(backupName) {
           onprogress: (done) => onProgress(packed + done, total),
         });
         packed += file.size;
+      }
+      for (const { path, entry } of attachments) {
+        const { readable, writable } = new TransformStream();
+        const options = { lastModDate: entry.lastModDate, onprogress: (done) => onProgress(packed + done, total) };
+        if (STORED_EXTENSIONS.test(path)) options.level = 0;
+        await Promise.all([entry.getData(writable), zipWriter.add(path, readable, options)]);
+        packed += entry.uncompressedSize;
+        onProgress(packed, total);
       }
       await zipWriter.close();
       sink.close();
