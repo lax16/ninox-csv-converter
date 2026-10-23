@@ -1,7 +1,27 @@
 # Ninox Backup CSV Converter
 This tool can convert Ninox backup files (.ninox) to CSVs containing the backup's table data.
 
-## How to use
+## Web version
+The `web` folder contains a static single-page version that converts the backup entirely in the browser. Nothing is uploaded, and backups of several gigabytes work because everything is streamed:
+
+- the backup is read in slices with [zip.js](https://gildas-lormeau.github.io/zip.js/) (vendored in `web/vendor`), `data.db` is decompressed and parsed line by line in a Web Worker
+- CSV rows are written as they are produced, either directly into a folder you pick (Chrome/Edge, File System Access API) or into the browser's private storage (OPFS), from where they are packed into one ZIP for download (all browsers; needs free disk space for the CSVs plus the ZIP)
+
+The page has to be served over HTTP (workers don't load from `file://`). Any static web server works, e.g.:
+
+```bash
+python -m http.server 8765 --directory web
+```
+
+Then open http://localhost:8765. For production, upload the contents of `web` to any static host (GitHub Pages etc.).
+
+Differences to `main.py`:
+- records whose key contains a `0` (e.g. `UA10`) are no longer skipped
+- values are not altered; values containing `;`, `"` or line breaks are quoted per RFC 4180 instead
+- every CSV starts with an `ID` column so `-ref` columns can be resolved
+- optional UTF-8 BOM so Excel detects the encoding
+
+## How to use (Python script)
 First, create a venv and activate it:
 
 ```bash

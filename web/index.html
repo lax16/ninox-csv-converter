@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'">
+<title>Ninox CSV Converter</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --text: #1b1f24; --muted: #5d6673; --border: #d9dde3;
+    --accent: #2f6fde; --accent-text: #ffffff; --ok: #1d7f4e; --err: #b42318; --track: #e7eaee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121417; --surface: #1b1e23; --text: #e6e8eb; --muted: #9aa3ae; --border: #2e333a;
+      --accent: #5b8ff0; --accent-text: #0d1117; --ok: #4cc38a; --err: #f97066; --track: #2a2f36; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  .lead { color: var(--muted); margin: 0 0 24px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+  #drop { border: 2px dashed var(--border); border-radius: 10px; padding: 28px 16px; text-align: center; cursor: pointer; transition: border-color .15s; }
+  #drop.over, #drop:hover { border-color: var(--accent); }
+  #drop strong { display: block; word-break: break-all; }
+  #drop span { color: var(--muted); font-size: .9rem; }
+  fieldset { border: 0; padding: 0; margin: 16px 0 0; }
+  legend { font-weight: 600; margin-bottom: 6px; }
+  label { display: flex; gap: 8px; align-items: baseline; margin: 4px 0; }
+  label small { color: var(--muted); }
+  label.disabled { color: var(--muted); }
+  .actions { display: flex; gap: 8px; margin-top: 20px; flex-wrap: wrap; }
+  button { font: inherit; border-radius: 8px; padding: 8px 18px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  .bar { height: 10px; background: var(--track); border-radius: 5px; overflow: hidden; margin: 8px 0; }
+  .bar div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  #status { font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); font-size: .9rem; }
+  .error { color: var(--err); }
+  .ok { color: var(--ok); }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  td:last-child, th:last-child { text-align: right; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Ninox CSV Converter</h1>
+  <p class="lead">Converts a Ninox backup (.ninox) into one CSV file per table. Everything happens in this browser tab &mdash; the backup is never uploaded.</p>
+
+  <section class="card">
+    <div id="drop" tabindex="0" role="button" aria-label="Choose Ninox backup">
+      <strong id="file-name">Drop a .ninox backup here or click to choose</strong>
+      <span id="file-info">Backups of several gigabytes are fine.</span>
+    </div>
+    <input type="file" id="file" accept=".ninox,.zip" hidden>
+
+    <fieldset>
+      <legend>Output</legend>
+      <label id="folder-label"><input type="radio" name="mode" value="folder"> <span>Write CSV files into a folder <small id="folder-note">(you pick the folder)</small></span></label>
+      <label><input type="radio" name="mode" value="zip"> <span>Download one ZIP with all CSV files <small>(staged in browser storage, needs free disk space)</small></span></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Options</legend>
+      <label><input type="checkbox" id="bom" checked> <span>Add UTF-8 BOM <small>(makes Excel show umlauts correctly)</small></span></label>
+    </fieldset>
+
+    <div class="actions">
+      <button class="primary" id="start" disabled>Convert</button>
+      <button id="cancel" hidden>Cancel</button>
+    </div>
+  </section>
+
+  <section class="card" id="progress-card" hidden>
+    <div id="phase">Converting&hellip;</div>
+    <div class="bar"><div id="bar"></div></div>
+    <div id="status" class="muted"></div>
+  </section>
+
+  <section class="card" id="result-card" hidden>
+    <div id="result"></div>
+    <div class="actions"><button class="primary" id="download" hidden>Download ZIP</button></div>
+    <table id="tables" hidden>
+      <thead><tr><th>Table</th><th>File</th><th>Rows</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <p class="muted">Columns: record ID, creation and modification date (Unix ms), then all fields. Reference fields are suffixed with <code>-ref</code> and contain the referenced record's ID. Separator is <code>;</code>, values are quoted per RFC&nbsp;4180.</p>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
