@@ -73,3 +73,8 @@ as well as the record's column data.
 
 ## Limitations
 The Python script does nothing with attachments (the web version does, see above).
+
+## Disclaimer
+This is an unofficial, non-commercial hobby project. It is not affiliated with, endorsed by, or supported by Ninox or its makers.
+"Ninox" is a trademark of its respective owner and is only used to describe which backup files this tool reads.
+The tool is provided as is, without any warranty. Please check the converted data before relying on it.

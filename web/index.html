@@ -42,6 +42,7 @@
   table { width: 100%; border-collapse: collapse; margin-top: 12px; font-variant-numeric: tabular-nums; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
   td:last-child, th:last-child { text-align: right; }
+  footer { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: .85rem; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -91,6 +92,10 @@
   </section>
 
   <p class="muted">Columns: record ID, creation and modification date (Unix ms), then all fields. Reference fields are suffixed with <code>-ref</code> and contain the referenced record's ID. File fields contain the attachment's path relative to the CSV, e.g. <code>files/Fahrzeuge/11/vorne.jpg</code>. Separator is <code>;</code>, values are quoted per RFC&nbsp;4180.</p>
+
+  <footer>
+    <p><strong>Disclaimer:</strong> This is an unofficial, non-commercial hobby project. It is not affiliated with, endorsed by, or supported by Ninox or its makers. &ldquo;Ninox&rdquo; is a trademark of its respective owner and is used here only to describe which backup files this tool reads. The tool is provided as is, without any warranty &mdash; please check the converted data before relying on it.</p>
+  </footer>
 </main>
 <script src="app.js"></script>
 </body>
